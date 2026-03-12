@@ -106,7 +106,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut enc = Encoder::new();
 
     // Set up arithmetic coding context(s)
-    let mut pixel_difference_pdf = VectorCountSymbolModel::new((0..=255).collect());
+    let mut contexts: Vec<VectorCountSymbolModel<i32>> = (0..256)
+    .map(|_| VectorCountSymbolModel::new((0..=255).collect()))
+    .collect();
 
     // Process frames
     for frame in iter.filter_frames() {
@@ -123,6 +125,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for r in 0..height {
                 for c in 0..width {
                     let pixel_index = (r * width + c) as usize;
+		    let context_id = if c == 0 { 128 } else { current_frame[pixel_index - 1] } as usize;
+                    let pixel_difference = (((current_frame[pixel_index] as i32) - (prior_frame[pixel_index] as i32)) + 256) % 256;
+
 
                     // Encode difference with same pixel in prior frame.
                     // Normalize and modulate difference to 8-bit range.
@@ -131,10 +136,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         + 256)
                         % 256;
 
-                    enc.encode(&pixel_difference, &pixel_difference_pdf, &mut bw);
+                    enc.encode(&pixel_difference, &contexts[context_id], &mut bw);
+                    contexts[context_id].incr_count(&pixel_difference);
 
                     // Update context
-                    pixel_difference_pdf.incr_count(&pixel_difference);
+                   
                 }
             }
 
@@ -177,7 +183,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .iter()?; // <- Blocking iterator over logs and output
 
         let mut dec = Decoder::new();
-
+	let mut contexts: Vec<VectorCountSymbolModel<i32>> = 
+(0..256).map(|_|VectorCountSymbolModel::new((0..=255).collect())).collect();
         let mut pixel_difference_pdf = VectorCountSymbolModel::new((0..=255).collect());
 
         // Set up initial prior frame as uniform medium gray
@@ -196,9 +203,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for r in 0..height {
                     for c in 0..width {
                         let pixel_index = (r * width + c) as usize;
-                        let decoded_pixel_difference = dec.decode(&pixel_difference_pdf, &mut br).to_owned();
-                        pixel_difference_pdf.incr_count(&decoded_pixel_difference);
+                        
 
+                        let context_id = if c == 0 { 128 } else {current_frame[pixel_index - 1] } as usize;
+                        let decoded_pixel_difference: i32 = 
+dec.decode(&contexts[context_id], &mut br).to_owned();
+                        contexts[context_id].incr_count(&decoded_pixel_difference);
                         let pixel_value = (prior_frame[pixel_index] as i32 + decoded_pixel_difference) % 256;
 
                         if pixel_value != current_frame[pixel_index] as i32 {
